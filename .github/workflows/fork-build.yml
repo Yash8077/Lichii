@@ -120,7 +120,7 @@ jobs:
             libssl-dev libopus-dev libzstd-dev liblz4-dev zlib1g-dev \
             libboost-all-dev libfmt-dev nlohmann-json3-dev \
             libavcodec-dev libavfilter-dev libavutil-dev libswscale-dev \
-            libudev-dev libx11-dev libxext-dev libxkbcommon-dev \
+            libudev-dev libx11-dev libxext-dev libxkbcommon-dev libxtst-dev \
             libwayland-dev libsdl2-dev libasound2-dev libpulse-dev \
             libglu1-mesa-dev mesa-common-dev
 
