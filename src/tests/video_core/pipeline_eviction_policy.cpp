@@ -67,3 +67,17 @@ TEST_CASE("The prebuild holds what the kept limit leaves past the boot builds",
     // Without a kept limit (Android), as many as eviction keeps unused
     REQUIRE(PrebuildLimit(0, 1500) == MaxUnusedPrebuiltPipelines);
 }
+
+TEST_CASE("RAM tiers: Auto by installed RAM, High keeps what a quarter of RAM holds",
+          "[video_core][pipeline_eviction]") {
+    using Vulkan::AutoRamTier;
+    using Vulkan::KeptPipelinesForTier;
+    using Vulkan::RamTier;
+    constexpr u64 GiB = u64{1} << 30;
+    REQUIRE(AutoRamTier(31 * GiB) == RamTier::High); // a "32 GB" PC reports a bit less
+    REQUIRE(AutoRamTier(15 * GiB) == RamTier::Balanced);
+    REQUIRE(AutoRamTier(8 * GiB) == RamTier::Low);
+    REQUIRE(KeptPipelinesForTier(RamTier::High, 32 * GiB) == KeptPipelinesForMemory(32 * GiB));
+    REQUIRE(KeptPipelinesForTier(RamTier::Balanced, 32 * GiB) == 3000);
+    REQUIRE(KeptPipelinesForTier(RamTier::Low, 32 * GiB) == 1200);
+}
