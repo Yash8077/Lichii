@@ -65,6 +65,10 @@ jobs:
           key: ccache-windows-${{ github.sha }}
           restore-keys: ccache-windows-
 
+      - name: Install Vulkan SDK
+        shell: pwsh
+        run: ./tools/windows/install-vulkan-sdk.ps1
+        
       - name: Configure
         shell: pwsh
         run: >
