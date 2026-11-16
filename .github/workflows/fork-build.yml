@@ -1,0 +1,180 @@
+name: Fork Build
+
+# Builds Lichii on Windows (MSVC) and Linux and uploads the result as an artifact.
+# Tag a commit like v1.0.0 to also publish a GitHub Release with the Windows/Linux archives.
+
+on:
+  push:
+    branches: [next]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: "CMake build type"
+        default: Release
+        type: choice
+        options: [Release, RelWithDebInfo, Debug]
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BUILD_TYPE: ${{ inputs.build_type || 'Release' }}
+  QT_VERSION: "6.8.3"
+
+jobs:
+  windows:
+    name: Windows (MSVC)
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install Ninja and ccache
+        shell: pwsh
+        run: choco install ninja ccache -y --no-progress
+
+      # The bundled static Qt is built with a newer MSVC than VS 2022 ships,
+      # which causes LNK1120 link errors (see docs/Build.md). Use the same Qt as upstream CI.
+      - name: Install Qt
+        shell: pwsh
+        run: |
+          python -m pip install aqtinstall
+          python -m aqt install-qt windows desktop $env:QT_VERSION win64_msvc2022_64 -m qtcharts -O C:\Qt
+
+      - name: Cache CPM downloads
+        uses: actions/cache@v4
+        with:
+          path: .cache/cpm
+          key: cpm-windows-${{ hashFiles('cpmfile.json', '**/cpmfile.json') }}
+          restore-keys: cpm-windows-
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\ccache
+          key: ccache-windows-${{ github.sha }}
+          restore-keys: ccache-windows-
+
+      - name: Configure
+        shell: pwsh
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=$env:BUILD_TYPE
+          -DLICHII_TESTS=OFF
+          -DLICHII_USE_BUNDLED_QT=OFF
+          -DQt6_DIR="C:/Qt/$env:QT_VERSION/msvc2022_64/lib/cmake/Qt6"
+          -DCMAKE_C_COMPILER_LAUNCHER=ccache
+          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Bundle Qt runtime
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem build/bin -Filter "lichii.exe" -Recurse | Select-Object -First 1
+          if (-not $exe) { throw "lichii.exe not found in build/bin" }
+          & "C:\Qt\$env:QT_VERSION\msvc2022_64\bin\windeployqt.exe" --release $exe.FullName
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist-out | Out-Null
+          Compress-Archive -Path build/bin/* -DestinationPath dist-out/lichii-windows-x64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lichii-windows-x64
+          path: dist-out/lichii-windows-x64.zip
+          if-no-files-found: error
+
+  linux:
+    name: Linux (x86_64)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      # Best-effort dependency list for an Eden/yuzu-family project.
+      # Compare against docs/Deps.md and add or remove packages if configure complains.
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build ccache pkg-config git \
+            qt6-base-dev qt6-base-private-dev qt6-multimedia-dev qt6-charts-dev \
+            qt6-svg-dev qt6-tools-dev qt6-l10n-tools qt6-wayland libqt6svg6-dev \
+            libvulkan-dev glslang-tools spirv-tools \
+            libssl-dev libopus-dev libzstd-dev liblz4-dev zlib1g-dev \
+            libboost-all-dev libfmt-dev nlohmann-json3-dev \
+            libavcodec-dev libavfilter-dev libavutil-dev libswscale-dev \
+            libudev-dev libx11-dev libxext-dev libxkbcommon-dev \
+            libwayland-dev libsdl2-dev libasound2-dev libpulse-dev \
+            libglu1-mesa-dev mesa-common-dev
+
+      - name: Cache CPM downloads
+        uses: actions/cache@v4
+        with:
+          path: .cache/cpm
+          key: cpm-linux-${{ hashFiles('cpmfile.json', '**/cpmfile.json') }}
+          restore-keys: cpm-linux-
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-linux-${{ github.sha }}
+          restore-keys: ccache-linux-
+
+      - name: Configure
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=$BUILD_TYPE
+          -DLICHII_TESTS=OFF
+          -DCMAKE_C_COMPILER_LAUNCHER=ccache
+          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Package
+        run: |
+          test -f build/bin/lichii || { echo "build/bin/lichii not found"; ls -la build/bin; exit 1; }
+          mkdir -p dist-out
+          tar -C build/bin -czf dist-out/lichii-linux-x86_64.tar.gz .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lichii-linux-x86_64
+          path: dist-out/lichii-linux-x86_64.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, linux]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true
